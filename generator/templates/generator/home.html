@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>IA Vídeo Generator</title>
+</head>
+<body>
+    <h1>Generate Video with Narration</h1>
+    <form action="" method="POST" enctype="multipart/form-data">
+        {% csrf_token %}
+        <label for="script">Type text to narration:</label><br>
+        <textarea name="script" rows="4" cols="50"></textarea><br><br>
+
+        <label for="media">Select an image or video:</label><br>
+        <input type="file" name="media" accept="image/*, video/*"><br><br>
+
+        <button type="submit">Generate Video</button>
+    </form>
+</body>
+</html>
