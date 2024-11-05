@@ -16,30 +16,51 @@ client = texttospeech.TextToSpeechClient()
 @csrf_exempt
 def home(request):
     if request.method == 'POST':
-        script = request.POST['script']
-        media_file = request.FILES['media']
+        script = request.POST.get('script', '')
+        media_file = request.FILES.get('media')
         use_chapters = 'use_chapters' in request.POST
 
-        # Gerar um nome de arquivo seguro
+        audio_filenames = None
+        audio_filename = None
+        video_filename = None
+
         filename = f"{slugify(os.path.splitext(media_file.name)[0])}_{uuid.uuid4()}{os.path.splitext(media_file.name)[1]}"
         media_path = default_storage.save(f'uploads/{filename}', media_file)
         media_path_full = os.path.join(settings.MEDIA_ROOT, media_path)
 
-        # Verifique se o arquivo existe no caminho
         if not os.path.exists(media_path_full):
             raise FileNotFoundError(
-                f"Arquivo de mídia não encontrado: {media_path_full}")
+                f"Midia file didnt find: {media_path_full}")
 
-        # Geração de áudio e vídeo
-        if use_chapters:
-            audio_filenames = generate_audio_for_chapters(script)
-            video_filename = create_video_for_chapters(
-                media_path_full, audio_filenames, script)
-        else:
-            audio_filename = generate_audio(script)
-            video_filename = create_video(media_path_full, audio_filename)
+        try:
+            if use_chapters:
+                audio_filenames = generate_audio_for_chapters(script)
+                video_filename = create_video_for_chapters(
+                    media_path_full, audio_filenames, script)
+            else:
+                audio_filename = generate_audio(script)
+                video_filename = create_video(media_path_full, audio_filename)
 
-        return FileResponse(open(video_filename, 'rb'), as_attachment=True)
+            response = FileResponse(
+                open(video_filename, 'rb'), as_attachment=True)
+            response[
+                'Content-Disposition'] = f'attachment; filename="{os.path.basename(video_filename)}"'
+            return response
+
+        finally:
+            if media_path_full and os.path.exists(media_path_full):
+                os.remove(media_path_full)
+
+            if use_chapters:
+                for audio_file in audio_filenames:
+                    if audio_file and os.path.exists(audio_file):
+                        os.remove(audio_file)
+            else:
+                if audio_filename and os.path.exists(audio_filename):
+                    os.remove(audio_filename)
+
+            if video_filename and os.path.exists(video_filename):
+                os.remove(video_filename)
 
     return render(request, 'generator/home.html')
 
@@ -47,7 +68,7 @@ def home(request):
 def generate_audio(text):
     synthesis_input = texttospeech.SynthesisInput(text=text)
     voice = texttospeech.VoiceSelectionParams(
-        language_code="pt-BR", ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL)
+        language_code="pt-BR", ssml_gender=texttospeech.SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED)
     audio_config = texttospeech.AudioConfig(
         audio_encoding=texttospeech.AudioEncoding.MP3)
 
@@ -66,6 +87,7 @@ def generate_audio(text):
 
 
 def create_video(media_path_full, audio_filename):
+    os.makedirs("media", exist_ok=True)
     output_video = f"media/video_{uuid.uuid4()}.mp4"
 
     if media_path_full.lower().endswith(('png', 'jpg', 'jpeg')):
@@ -76,8 +98,13 @@ def create_video(media_path_full, audio_filename):
 
     audio_clip = AudioFileClip(audio_filename)
     final_clip = image_clip.set_audio(audio_clip)
-    final_clip.write_videofile(
-        output_video, codec='libx264', audio_codec='aac', fps=24)
+
+    try:
+        final_clip.write_videofile(
+            output_video, codec='libx264', audio_codec='aac', fps=24)
+    except Exception as e:
+        print(f"Error creating video: {e}")
+        return None
 
     return output_video
 
@@ -111,9 +138,17 @@ def create_video_for_chapters(media_path, audio_filenames, subtitles=None):
         clips.append(final_clip)
 
     final_video = concatenate_videoclips(clips)
+
+    os.makedirs("media", exist_ok=True)
     output_video = f"media/long_video_{uuid.uuid4()}.mp4"
-    final_video.write_videofile(
-        output_video, codec="libx264", audio_codec="aac")
+
+    try:
+        final_video.write_videofile(
+            output_video, codec='libx264', audio_codec='aac', fps=24)
+    except Exception as e:
+        print(f"Error creating video: {e}")
+        return None
+
     return output_video
 
 
