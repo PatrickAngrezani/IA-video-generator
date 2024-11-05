@@ -8,9 +8,13 @@ from django.core.files.storage import default_storage
 from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
+import spacy
+from sklearn.feature_extraction.text import TfidfVectorizer
+from nltk.corpus import stopwords
 
 
 client = texttospeech.TextToSpeechClient()
+nlp = spacy.load("pt_core_news_sm")
 
 
 @csrf_exempt
@@ -19,6 +23,9 @@ def home(request):
         script = request.POST.get('script', '')
         media_file = request.FILES.get('media')
         use_chapters = 'use_chapters' in request.POST
+
+        themes_and_keywords = extract_themes_and_keywords(script)
+        print("Extracted keywords:", themes_and_keywords)
 
         audio_filenames = None
         audio_filename = None
@@ -30,16 +37,16 @@ def home(request):
 
         if not os.path.exists(media_path_full):
             raise FileNotFoundError(
-                f"Midia file didnt find: {media_path_full}")
+                f"Midia file didn't find: {media_path_full}")
 
         try:
             if use_chapters:
-                audio_filenames = generate_audio_for_chapters(script)
-                video_filename = create_video_for_chapters(
-                    media_path_full, audio_filenames, script)
+                audio_filenames = generate_audio_for_themes(themes_and_keywords)
+                video_filename = create_video_for_themes(
+                    media_path_full, audio_filenames, themes_and_keywords)
             else:
                 audio_filename = generate_audio(script)
-                video_filename = create_video(media_path_full, audio_filename)
+                video_filename = create_video(media_path_full, audio_filename, themes_and_keywords)
 
             response = FileResponse(
                 open(video_filename, 'rb'), as_attachment=True)
@@ -86,7 +93,7 @@ def generate_audio(text):
     return audio_filename
 
 
-def create_video(media_path_full, audio_filename):
+def create_video(media_path_full, audio_filename, themes_and_keywords=None):
     os.makedirs("media", exist_ok=True)
     output_video = f"media/video_{uuid.uuid4()}.mp4"
 
@@ -98,6 +105,10 @@ def create_video(media_path_full, audio_filename):
 
     audio_clip = AudioFileClip(audio_filename)
     final_clip = image_clip.set_audio(audio_clip)
+    
+    if themes_and_keywords:
+        for text in themes_and_keywords:
+            final_clip = add_subtitles_to_video(final_clip, text)
 
     try:
         final_clip.write_videofile(
@@ -109,19 +120,17 @@ def create_video(media_path_full, audio_filename):
     return output_video
 
 
-def generate_audio_for_chapters(script):
-    chapters = script.split('---')
+def generate_audio_for_themes(themes_and_keywords):
     audio_filenames = []
-    for chapter in chapters:
-        audio_filename = generate_audio(chapter)
+    for theme in themes_and_keywords:
+        audio_filename = generate_audio(theme)
         audio_filenames.append(audio_filename)
     return audio_filenames
 
 
-def create_video_for_chapters(media_path, audio_filenames, subtitles=None):
+def create_video_for_themes(media_path, audio_filenames, themes_and_keywords):
     clips = []
-    chapters = subtitles.split(
-        '---') if subtitles else [""] * len(audio_filenames)
+    chapters = themes_and_keywords  
 
     for audio_filename, chapter_text in zip(audio_filenames, chapters):
         if media_path.lower().endswith(('png', 'jpg', 'jpeg')):
@@ -152,9 +161,48 @@ def create_video_for_chapters(media_path, audio_filenames, subtitles=None):
     return output_video
 
 
-def add_subtitles_to_video(video_clip, text):
-    subtitle = TextClip(text, fontsize=24, color="white")
-    subtitle = subtitle.set_position(
-        'bottom').set_duration(video_clip.duration)
-    final_clip = CompositeVideoClip([video_clip, subtitle])
-    return final_clip
+def add_subtitles_to_video(video_clip, texts):
+    clips_with_subtitles = []
+    for text in texts:
+        subtitle = TextClip(text, fontsize=24, color=white)
+        subtitle = subtitle.set_position(
+            'bottom').set_duration(video_clip.duration / len(texts))
+        video_clip = CompositeVideoClip([video_clip, subtitle])
+        clips_with_subtitles.append(video_clip)
+    return concatenate_videoclips(clips_with_subtitles)
+
+
+def extract_themes_with_spacy(text):
+    doc = nlp(text)
+
+    entities = [ent.text for ent in doc.ents]
+
+    noun_chunks = [chunk.text for chunk in doc.noun_chunks]
+
+    themes = list(set(entities + noun_chunks))
+    return themes
+
+
+def extract_keywords_from_script(script):
+    stop_words_portuguese = stopwords.words('portuguese')
+    tfidf_vectorizer = TfidfVectorizer(stop_words=stop_words_portuguese)
+
+    texts = [script]
+    tdidf_matrix = tfidf_vectorizer.fit_transform(texts)
+    feature_names = tfidf_vectorizer.get_feature_names_out()
+
+    tfidf_scores = tdidf_matrix[0].T.todense()
+    keywords = [(feature_names[i], score)
+                for i, score in enumerate(tfidf_scores) if score > 0.1]
+    sorted_keywords = [keyword[0]
+                       for keyword in sorted(keywords, key=lambda x: -x[1])]
+    return sorted_keywords
+
+
+def extract_themes_and_keywords(text):
+    themes = extract_themes_with_spacy(text)
+
+    keywords = extract_keywords_from_script(text)
+
+    combined_themes_and_keywords = list(set(themes + keywords))
+    return combined_themes_and_keywords
